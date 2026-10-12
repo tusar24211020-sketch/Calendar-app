@@ -11,7 +11,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Build
         working-directory: android
         run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
