@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,11 +41,28 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK 35
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Use preinstalled Android SDK and install SDK 35
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)"
+          fi
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "Android sdkmanager not found in $SDK_ROOT"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "Using preinstalled SDK: $SDK_ROOT"
+          "$SDKMANAGER" --version
+          # Use finite stdin instead of yes | sdkmanager (avoids pipefail/SIGPIPE).
+          python3 -c 'print("y\n" * 1000)' > "$RUNNER_TEMP/android-license-answers.txt"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses < "$RUNNER_TEMP/android-license-answers.txt"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-35" "build-tools;35.0.0"
+          printf 'sdk.dir=%s\n' "$SDK_ROOT" > "$CALENDAR_ROOT/android/local.properties"
 
       - name: Build release APK
         shell: bash
