@@ -8,6 +8,7 @@ on:
       - "source.zip"
       - "www/**"
       - "android/**"
+      - "tools/validate-source.py"
       - ".github/workflows/build-apk.yml"
 
 permissions:
@@ -39,6 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 "$CALENDAR_ROOT/tools/validate-source.py"
           node --check "$CALENDAR_ROOT/www/app.js"
           node --check "$CALENDAR_ROOT/www/holidays.js"
           test -f "$CALENDAR_ROOT/www/glass.css"
@@ -74,13 +76,13 @@ jobs:
           "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-35" "build-tools;35.0.0"
           printf 'sdk.dir=%s\n' "$SDK_ROOT" > "$CALENDAR_ROOT/android/local.properties"
 
-      - name: Build release APK
+      - name: Unit tests, Android lint, and release APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$CALENDAR_ROOT/android"
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew testDebugUnitTest lintDebug assembleRelease --no-daemon --stacktrace
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
           cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/apk-output/Calendar.apk"
 
@@ -90,3 +92,14 @@ jobs:
           name: Calendar-release-apk
           path: apk-output/Calendar.apk
           if-no-files-found: error
+
+      - name: Upload native QA reports
+        if: always() && env.CALENDAR_ROOT != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: Calendar-native-QA
+          path: |
+            ${{ env.CALENDAR_ROOT }}/android/app/build/reports/tests/
+            ${{ env.CALENDAR_ROOT }}/android/app/build/test-results/
+            ${{ env.CALENDAR_ROOT }}/android/app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
