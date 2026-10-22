@@ -1,4 +1,4 @@
-name: Build Calendar APK
+name: Build Calendar Soft Glass APK
 
 on:
   workflow_dispatch:
@@ -8,8 +8,13 @@ on:
       - "source.zip"
       - "www/**"
       - "android/**"
-      - "tools/validate-source.py"
+      - "tools/**"
+      - "tests/**"
       - ".github/workflows/build-apk.yml"
+
+concurrency:
+  group: calendar-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,6 +52,34 @@ jobs:
           test -f "$CALENDAR_ROOT/www/glass.css"
           test -f "$CALENDAR_ROOT/www/NotoSansBengali.ttf"
           python3 -c 'import os, xml.etree.ElementTree as E; E.parse(os.environ["CALENDAR_ROOT"] + "/android/app/src/main/AndroidManifest.xml")'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Browser clock, transition, and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/calendar-qa" --no-audit --no-fund playwright@1.63.0
+          export NODE_PATH="$RUNNER_TEMP/calendar-qa/node_modules"
+          "$RUNNER_TEMP/calendar-qa/node_modules/.bin/playwright" install --with-deps chromium
+          export CHROMIUM_PATH="$(node -e 'console.log(require("playwright").chromium.executablePath())')"
+          export APP_URL="http://127.0.0.1:8766"
+          mkdir -p "$CALENDAR_ROOT/previews" "$CALENDAR_ROOT/QA/v190"
+          python3 -m http.server 8766 --bind 127.0.0.1 --directory "$CALENDAR_ROOT/www" > "$RUNNER_TEMP/calendar-http.log" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$APP_URL" > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS "$APP_URL" > /dev/null
+          cd "$CALENDAR_ROOT"
+          for suite in tests/*-qa.js; do
+            node "$suite" | tee "QA/v190/$(basename "$suite" .js).log"
+          done
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -82,6 +116,10 @@ jobs:
           set -euo pipefail
           cd "$CALENDAR_ROOT/android"
           chmod +x gradlew
+          # Compile the production pure-Java date policy before Android framework tests.
+          mkdir -p "$RUNNER_TEMP/date-policy"
+          javac -d "$RUNNER_TEMP/date-policy" app/src/main/java/com/t/calendar/DateRules.java ../tests/native/DatePolicyCheck.java
+          java -cp "$RUNNER_TEMP/date-policy" com.t.calendar.DatePolicyCheck | tee ../QA/v190/native-date-policy.log
           ./gradlew testDebugUnitTest lintDebug assembleRelease --no-daemon --stacktrace
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
           cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/apk-output/Calendar.apk"
@@ -89,9 +127,20 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Calendar-release-apk
+          name: Calendar-v1.9.0-release-apk
           path: apk-output/Calendar.apk
           if-no-files-found: error
+
+      - name: Upload browser QA reports
+        if: always() && env.CALENDAR_ROOT != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: Calendar-v1.9.0-browser-QA
+          path: |
+            ${{ env.CALENDAR_ROOT }}/*-QA.json
+            ${{ env.CALENDAR_ROOT }}/QA/v190/*.log
+            ${{ env.CALENDAR_ROOT }}/previews/*.png
+          if-no-files-found: warn
 
       - name: Upload native QA reports
         if: always() && env.CALENDAR_ROOT != ''
